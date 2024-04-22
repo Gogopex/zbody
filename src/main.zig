@@ -102,30 +102,11 @@ export fn frame() callconv(.C) void {
 
     // Render bodies and particles
     for (state.bodies) |b| {
-        const translation = mat3.translate(b.pos.x, b.pos.y);
-        const scaling = mat3.scale(b.radius, b.radius);
-        const modelMatrix = translation.mul(scaling);
-
-        const uniforms = Uniforms{
-            .modelMatrix = modelMatrix,
-            .color = b.color,
-        };
-        sg.applyUniforms(sg.ShaderStage.vs, 0, &uniforms);
-        sg.draw(0, 6, 1);
+        drawCircle(b.pos, b.radius, 12, b.color);
     }
 
     for (state.particles) |p| {
-        const translation = mat3.translate(p.pos.x, p.pos.y);
-        const scaling = mat3.scale(p.radius, p.radius);
-        const modelMatrix = translation.mul(scaling);
-
-        const uniforms = Uniforms{
-            .modelMatrix = modelMatrix,
-            .color = p.color,
-        };
-
-        sg.applyUniforms(sg.ShaderStage.vs, 0, &uniforms);
-        sg.draw(0, 6, 1);
+        drawCircle(p.pos, p.radius, 12, p.color);
     }
 
     sg.endPass();
@@ -133,6 +114,7 @@ export fn frame() callconv(.C) void {
 }
 
 export fn cleanup() void {
+    sgl.shutdown();
     sg.shutdown();
 }
 
@@ -153,4 +135,29 @@ fn calculateModelMatrix(entity: anytype) mat3 {
     const scaling = mat3.scale(entity.radius, entity.radius);
     const modelMatrix = translation.mul(scaling);
     return modelMatrix;
+}
+
+pub fn drawCircle(center: vec2, radius: f32, segments: u32, color: RGB) void {
+    sgl.sgl_c4f(color.r, color.g, color.b, color.a); // Set color
+    sgl.sgl_begin_triangles();
+    var i: u32 = 0;
+    while (i < segments) : (i += 1) {
+        const segments_f32 = @as(f32, @floatFromInt(segments));
+        const i_f32 = @as(f32, @floatFromInt(i));
+        // Central vertex
+        sgl.sgl_v2f(center.x, center.y);
+
+        // First vertex on the edge of the circle
+        const angle1: f32 = 2.0 * std.math.pi * (i_f32 / segments_f32);
+        const x1 = center.x + radius * std.math.cos(angle1);
+        const y1 = center.y + radius * std.math.sin(angle1);
+        sgl.sgl_v2f(x1, y1);
+
+        // Second vertex on the edge of the circle
+        const angle2 = 2.0 * std.math.pi * ((i_f32 + 1) / segments_f32);
+        const x2 = center.x + radius * std.math.cos(angle2);
+        const y2 = center.y + radius * std.math.sin(angle2);
+        sgl.sgl_v2f(x2, y2);
+    }
+    sgl.sgl_end();
 }
