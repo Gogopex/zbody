@@ -1,8 +1,16 @@
-.{ .name = "zbody", .version = "0.1.0", .paths = .{
-    "src",
-    "build.zig",
-    "build.zig.zon",
-}, .dependencies = .{ .sokol = .{ .url = "git+https://github.com/floooh/sokol-zig.git#a9860f4b2962c7522ea5babb22a8f0cefa24348f", .hash = "1220f60ad2131ae835289a0521b8c252ae3f8229dfac20b9803a498202ca4a1fdedc" }, .zlm = .{
-    .url = "https://github.com/ziglibs/zlm/archive/dce0e8ead4b14b2105076fad9cbc43bbdf439c21.tar.gz",
-    .hash = "12203782cb2501aa5fa88ce6ae488bcbdc86bf7cb002b641262bb0d897b1240aab50",
-} } }
+.{
+    .name = "zbody",
+    .version = "0.1.0",
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+    },
+    .dependencies = .{
+        .sokol = .{ .url = "git+https://github.com/floooh/sokol-zig.git#a9860f4b2962c7522ea5babb22a8f0cefa24348f", .hash = "1220f60ad2131ae835289a0521b8c252ae3f8229dfac20b9803a498202ca4a1fdedc" },
+        // .zlm = .{
+        //     .url = "git+https://github.com/ziglibs/zlm#833031bfdbfd24526e4115a59459f9c360d7b824",
+        //     .hash = "12205dbec9f917a3ab61ca65900dce7a04c9ec4348d0e2241a9c246b9c2d131d061b"
+        // }
+    },
+}
