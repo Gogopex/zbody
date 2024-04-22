@@ -88,3 +88,18 @@ pub const Mat3 = extern struct {
     // pub fn rotate(angle: f32) Mat3 {}
     // pub fn mul(angle: f32) Mat3 {}
 };
+
+pub const Mat4 = extern struct {
+    m: [4][4]f32,
+
+    pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Mat4 {
+        var result: Mat4 = undefined;
+        result.m[0][0] = 2.0 / (right - left);
+        result.m[1][1] = 2.0 / (top - bottom);
+        result.m[2][2] = -2.0 / (far - near);
+        result.m[3][0] = -(right + left) / (right - left);
+        result.m[3][1] = -(top + bottom) / (top - bottom);
+        result.m[3][2] = -(far + near) / (far - near);
+        return result;
+    }
+};

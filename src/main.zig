@@ -1,5 +1,6 @@
 const std = @import("std");
 const sokol = @import("sokol");
+const mat4 = @import("math.zig").Mat4;
 const mat3 = @import("math.zig").Mat3;
 const vec2 = @import("math.zig").Vec2;
 const sg = sokol.gfx;
@@ -21,13 +22,6 @@ pub const RGB = struct {
 
 const Body = struct {
     pos: vec2,
-    mass: f32,
-    radius: f32,
-    color: RGB,
-};
-
-const Particle = struct {
-    pos: vec2,
     vel: vec2,
     mass: f32,
     radius: f32,
@@ -35,18 +29,19 @@ const Particle = struct {
 };
 
 const MAX_BODIES = 3;
-const MAX_PARTICLES = 10;
 const G = 6.67430e-11;
 
 const State = struct {
-    bodies: [MAX_BODIES]Body,
-    particles: [MAX_PARTICLES]Particle,
-    bindings: sg.Bindings,
-    pipeline: sg.Pipeline,
-    pass_action: sg.PassAction,
+    // instantiate bodies with 3 elements
+    var bodies: [MAX_BODIES]Body = .{
+        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 0.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
+        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 0.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
+        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 0.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
+    };
+    var bindings: sg.Bindings = .{};
+    var pipeline: sg.Pipeline = .{};
+    var pass_action: sg.PassAction = .{};
 };
-
-var state: State = undefined;
 
 const Uniforms = struct {
     modelMatrix: mat3,
@@ -55,11 +50,6 @@ const Uniforms = struct {
 
 export fn init() void {
     sg.setup(.{
-        .buffer_pool_size = 2,
-        .image_pool_size = 3,
-        .shader_pool_size = 2,
-        .pipeline_pool_size = 2,
-        .attachments_pool_size = 1,
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
     });
@@ -70,7 +60,7 @@ export fn init() void {
 
     // Initialize bodies at random positions
     var rng = std.rand.DefaultPrng.init(0);
-    for (&state.bodies) |*b| {
+    for (&State.bodies) |*b| {
         b.*.pos = vec2{
             .x = rng.random().float(f32) * 800.0, // Range from 0 to 800
             .y = rng.random().float(f32) * 600.0, // Range from 0 to 600
@@ -80,56 +70,43 @@ export fn init() void {
         b.*.color = RGB{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }; // Red color for bodies
     }
 
-    // Initialize particles at random positions
-    for (&state.particles) |*p| {
-        p.pos = vec2{
-            .x = rng.random().float(f32) * 800.0, // Range from 0 to 800
-            .y = rng.random().float(f32) * 600.0, // Range from 0 to 600
-        };
-        p.vel = vec2{ .x = 0.0, .y = 0.0 };
-        p.mass = 0.1;
-        p.radius = 5.0; // Set radius to 5 pixels for particles
-        p.color = RGB{ .r = rng.random().float(f32), .g = rng.random().float(f32), .b = rng.random().float(f32), .a = 1.0 };
-    }
-
-    state.pass_action.colors[0].load_action = .DONTCARE;
-    state.pass_action.depth.load_action = .DONTCARE;
-    state.pass_action.stencil.load_action = .DONTCARE;
+    State.pass_action.colors[0].load_action = .CLEAR;
+    State.pass_action.colors[0].clear_value = sg.Color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 }; // Clear to black
+    State.pass_action.depth.load_action = .DONTCARE;
+    State.pass_action.stencil.load_action = .DONTCARE;
 }
 
 export fn frame() callconv(.C) void {
-    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
+    sg.beginPass(.{ .action = State.pass_action, .swapchain = sglue.swapchain() });
 
     std.debug.print("Rendering frame\n", .{});
 
-    const particleRadius = pixelsToWorldUnits(5.0, 600.0, 2.0); // Assuming 600px height and world height of 2 units
     const bodyRadius = pixelsToWorldUnits(50.0, 600.0, 2.0);
 
-    // Update particles based on gravity from bodies
-    for (&state.particles) |*p| {
+    // Update bodies based on gravity from bodies
+    for (0..MAX_BODIES) |i| {
         var force = vec2{ .x = 0.0, .y = 0.0 };
-        for (state.bodies) |b| {
-            const r = b.pos.sub(p.pos);
-            const r_squared = r.lengthSquared();
-            const f = G * b.mass * p.mass / r_squared;
-            force = force.add(r.normalize().scale(f));
+        for (0..MAX_BODIES) |j| {
+            if (i != j) {
+                const r = State.bodies[j].pos.sub(State.bodies[i].pos);
+                const r_squared = r.lengthSquared();
+                if (r_squared > 0.0001) {
+                    const f = G * State.bodies[j].mass * State.bodies[i].mass / r_squared;
+                    force = force.add(r.normalize().scale(f));
+                }
+            }
         }
-        p.vel = p.vel.add(force.scale(1.0 / p.mass));
-        p.pos = p.pos.add(p.vel.scale(1.0 / 60.0));
+        State.bodies[i].vel = State.bodies[i].vel.add(force.scale(1.0 / State.bodies[i].mass));
+        State.bodies[i].pos = State.bodies[i].pos.add(State.bodies[i].vel.scale(1.0 / 60.0)); // Assuming 60 FPS
     }
 
     // debug
     drawCircle(vec2{ .x = 15.0, .y = 15.0 }, bodyRadius, 12, RGB{ .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 });
 
-    // Render bodies and particles
-    for (state.bodies) |b| {
+    // Render bodies
+    for (State.bodies) |b| {
         std.debug.print("Body position: ({}, {})\n", .{ b.pos.x, b.pos.y });
-        drawCircle(b.pos, particleRadius, 12, b.color);
-    }
-
-    for (state.particles) |p| {
-        std.debug.print("Particle position: ({}, {})\n", .{ p.pos.x, p.pos.y });
-        drawCircle(p.pos, bodyRadius, 12, p.color);
+        drawCircle(b.pos, bodyRadius, 12, b.color);
     }
 
     sg.endPass();
@@ -186,15 +163,17 @@ pub fn drawCircle(center: vec2, radius: f32, segments: u32, color: RGB) void {
     sgl.sgl_end();
 }
 
-// fn getOrthographicProjection(left: f32, right: f32, bottom: f32, top: f32) Mat4 {
-//     return Mat4{
-//         .m1 = Vec4{ .x = 2.0 / (right - left), .y = 0.0, .z = 0.0, .w = 0.0 },
-//         .m2 = Vec4{ .x = 0.0, .y = 2.0 / (top - bottom), .z = 0.0, .w = 0.0 },
-//         .m3 = Vec4{ .x = 0.0, .y = 0.0, .z = 1.0, .w = 0.0 },
-//         .m4 = Vec4{ .x = -(right + left) / (right - left), .y = -(top + bottom) / (top - bottom), .z = 0.0, .w = 1.0 }
-//     }
-// }
-
 fn pixelsToWorldUnits(pixels: f32, screenSize: f32, worldSize: f32) f32 {
     return (pixels / screenSize) * worldSize;
+}
+
+pub fn getOrthographicProjectionMatrix(width: f32, height: f32) mat4 {
+    const left = 0.0;
+    const right = width;
+    const bottom = height;
+    const top = 0.0;
+    const near = -1.0;
+    const far = 1.0;
+
+    return mat4.orthographic(left, right, bottom, top, near, far);
 }
