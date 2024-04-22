@@ -55,6 +55,11 @@ const Uniforms = struct {
 
 export fn init() void {
     sg.setup(.{
+        .buffer_pool_size = 2,
+        .image_pool_size = 3,
+        .shader_pool_size = 2,
+        .pipeline_pool_size = 2,
+        .attachments_pool_size = 1,
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
     });
@@ -67,36 +72,38 @@ export fn init() void {
     var rng = std.rand.DefaultPrng.init(0);
     for (&state.bodies) |*b| {
         b.*.pos = vec2{
-            .x = rng.random().float(f32) * 2.0 - 1.0,
-            .y = rng.random().float(f32) * 2.0 - 1.0,
+            .x = rng.random().float(f32) * 800.0, // Range from 0 to 800
+            .y = rng.random().float(f32) * 600.0, // Range from 0 to 600
         };
         b.*.mass = 1.0;
-        b.*.radius = 0.1;
-        b.*.color = RGB{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+        b.*.radius = 50.0; // Set radius to 50 pixels for bodies
+        b.*.color = RGB{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }; // Red color for bodies
     }
 
     // Initialize particles at random positions
     for (&state.particles) |*p| {
         p.pos = vec2{
-            .x = rng.random().float(f32) * 2.0 - 1.0,
-            .y = rng.random().float(f32) * 2.0 - 1.0,
+            .x = rng.random().float(f32) * 800.0, // Range from 0 to 800
+            .y = rng.random().float(f32) * 600.0, // Range from 0 to 600
         };
         p.vel = vec2{ .x = 0.0, .y = 0.0 };
         p.mass = 0.1;
-        p.radius = 0.05;
-        p.color = RGB{ .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+        p.radius = 5.0; // Set radius to 5 pixels for particles
+        p.color = RGB{ .r = rng.random().float(f32), .g = rng.random().float(f32), .b = rng.random().float(f32), .a = 1.0 };
     }
 
-    state.pass_action.colors[0] = .{
-        .load_action = .CLEAR,
-        .clear_value = .{ .r = 0, .g = 0, .b = 0 },
-    };
+    state.pass_action.colors[0].load_action = .DONTCARE;
+    state.pass_action.depth.load_action = .DONTCARE;
+    state.pass_action.stencil.load_action = .DONTCARE;
 }
 
 export fn frame() callconv(.C) void {
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
     std.debug.print("Rendering frame\n", .{});
+
+    const particleRadius = pixelsToWorldUnits(5.0, 600.0, 2.0); // Assuming 600px height and world height of 2 units
+    const bodyRadius = pixelsToWorldUnits(50.0, 600.0, 2.0);
 
     // Update particles based on gravity from bodies
     for (&state.particles) |*p| {
@@ -111,17 +118,18 @@ export fn frame() callconv(.C) void {
         p.pos = p.pos.add(p.vel.scale(1.0 / 60.0));
     }
 
-    drawCircle(vec2{ .x = 15.0, .y = 15.0 }, 1000, 12, RGB{ .r = 0.5, .g = 1.0, .b = 0.5, .a = 1.0 });
+    // debug
+    drawCircle(vec2{ .x = 15.0, .y = 15.0 }, bodyRadius, 12, RGB{ .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 });
 
     // Render bodies and particles
     for (state.bodies) |b| {
         std.debug.print("Body position: ({}, {})\n", .{ b.pos.x, b.pos.y });
-        drawCircle(b.pos, b.radius, 12, b.color);
+        drawCircle(b.pos, particleRadius, 12, b.color);
     }
 
     for (state.particles) |p| {
         std.debug.print("Particle position: ({}, {})\n", .{ p.pos.x, p.pos.y });
-        drawCircle(p.pos, p.radius, 12, p.color);
+        drawCircle(p.pos, bodyRadius, 12, p.color);
     }
 
     sg.endPass();
@@ -153,7 +161,7 @@ fn calculateModelMatrix(entity: anytype) mat3 {
 }
 
 pub fn drawCircle(center: vec2, radius: f32, segments: u32, color: RGB) void {
-    sgl.sgl_c4f(color.r, color.g, color.b, color.a); // Set color
+    sgl.sgl_c4f(color.r, color.g, color.b, color.a);
     sgl.sgl_begin_triangles();
     std.debug.print("Drawing circle at: ({}, {})\n", .{ center.x, center.y });
     var i: u32 = 0;
@@ -176,4 +184,17 @@ pub fn drawCircle(center: vec2, radius: f32, segments: u32, color: RGB) void {
         sgl.sgl_v2f(x2, y2);
     }
     sgl.sgl_end();
+}
+
+// fn getOrthographicProjection(left: f32, right: f32, bottom: f32, top: f32) Mat4 {
+//     return Mat4{
+//         .m1 = Vec4{ .x = 2.0 / (right - left), .y = 0.0, .z = 0.0, .w = 0.0 },
+//         .m2 = Vec4{ .x = 0.0, .y = 2.0 / (top - bottom), .z = 0.0, .w = 0.0 },
+//         .m3 = Vec4{ .x = 0.0, .y = 0.0, .z = 1.0, .w = 0.0 },
+//         .m4 = Vec4{ .x = -(right + left) / (right - left), .y = -(top + bottom) / (top - bottom), .z = 0.0, .w = 1.0 }
+//     }
+// }
+
+fn pixelsToWorldUnits(pixels: f32, screenSize: f32, worldSize: f32) f32 {
+    return (pixels / screenSize) * worldSize;
 }
