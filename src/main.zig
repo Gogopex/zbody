@@ -59,6 +59,10 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
+    sgl.setup(.{
+        .logger = .{ .func = slog.func },
+    });
+
     // Initialize bodies at random positions
     var rng = std.rand.DefaultPrng.init(0);
     for (&state.bodies) |*b| {
@@ -82,10 +86,17 @@ export fn init() void {
         p.radius = 0.05;
         p.color = RGB{ .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
     }
+
+    state.pass_action.colors[0] = .{
+        .load_action = .CLEAR,
+        .clear_value = .{ .r = 0, .g = 0, .b = 0 },
+    };
 }
 
 export fn frame() callconv(.C) void {
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
+
+    std.debug.print("Rendering frame\n", .{});
 
     // Update particles based on gravity from bodies
     for (&state.particles) |*p| {
@@ -100,12 +111,16 @@ export fn frame() callconv(.C) void {
         p.pos = p.pos.add(p.vel.scale(1.0 / 60.0));
     }
 
+    drawCircle(vec2{ .x = 15.0, .y = 15.0 }, 1000, 12, RGB{ .r = 0.5, .g = 1.0, .b = 0.5, .a = 1.0 });
+
     // Render bodies and particles
     for (state.bodies) |b| {
+        std.debug.print("Body position: ({}, {})\n", .{ b.pos.x, b.pos.y });
         drawCircle(b.pos, b.radius, 12, b.color);
     }
 
     for (state.particles) |p| {
+        std.debug.print("Particle position: ({}, {})\n", .{ p.pos.x, p.pos.y });
         drawCircle(p.pos, p.radius, 12, p.color);
     }
 
@@ -140,6 +155,7 @@ fn calculateModelMatrix(entity: anytype) mat3 {
 pub fn drawCircle(center: vec2, radius: f32, segments: u32, color: RGB) void {
     sgl.sgl_c4f(color.r, color.g, color.b, color.a); // Set color
     sgl.sgl_begin_triangles();
+    std.debug.print("Drawing circle at: ({}, {})\n", .{ center.x, center.y });
     var i: u32 = 0;
     while (i < segments) : (i += 1) {
         const segments_f32 = @as(f32, @floatFromInt(segments));
