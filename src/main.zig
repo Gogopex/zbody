@@ -1,9 +1,7 @@
 const std = @import("std");
 const sokol = @import("sokol");
-// const zlm = @import("zlm");
 const mat3 = @import("math.zig").Mat3;
 const vec2 = @import("math.zig").Vec2;
-const vec3 = @import("math.zig").Vec3;
 const sg = sokol.gfx;
 const sapp = sokol.app;
 const sglue = sokol.glue;
@@ -21,56 +19,36 @@ pub const RGB = struct {
     }
 };
 
-const body = struct {
+const Body = struct {
     pos: vec2,
-    vel: vec2,
+    mass: f32,
     radius: f32,
-    color: RGB = RGB.new(),
-    indexCount: u32,
-};
-
-const particle = struct {
-    pos: vec2,
-    vel: vec2,
-    radius: f32,
-    color: RGB = RGB.new(),
-    indexCount: u32,
-};
-
-const MAX_BODIES = 1;
-const MAX_PARTICLES = 10;
-
-const state = struct {
-    var bodies: [MAX_BODIES]body = .{
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-    };
-    var num_bodies: u32 = 0;
-    var particles: [MAX_PARTICLES]particle = .{
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .vel = .{ .x = 0.01, .y = 0.01 }, .radius = 0.1, .color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }, .indexCount = 6 },
-    };
-    var num_particles: u32 = 0;
-    var time: f32 = 0;
-    var tick: f32 = 0;
-    var bindings: sg.Bindings = .{};
-    var pipeline: sg.Pipeline = .{};
-    var pass_action: sg.PassAction = .{};
-};
-
-const BodyUniforms = struct {
-    modelMatrix: mat3,
     color: RGB,
 };
 
-const ParticleUniforms = struct {
+const Particle = struct {
+    pos: vec2,
+    vel: vec2,
+    mass: f32,
+    radius: f32,
+    color: RGB,
+};
+
+const MAX_BODIES = 3;
+const MAX_PARTICLES = 10;
+const G = 6.67430e-11;
+
+const State = struct {
+    bodies: [MAX_BODIES]Body,
+    particles: [MAX_PARTICLES]Particle,
+    bindings: sg.Bindings,
+    pipeline: sg.Pipeline,
+    pass_action: sg.PassAction,
+};
+
+var state: State = undefined;
+
+const Uniforms = struct {
     modelMatrix: mat3,
     color: RGB,
 };
@@ -80,76 +58,78 @@ export fn init() void {
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
     });
+
+    // Initialize bodies at random positions
+    var rng = std.rand.DefaultPrng.init(0);
+    for (&state.bodies) |*b| {
+        b.*.pos = vec2{
+            .x = rng.random().float(f32) * 2.0 - 1.0,
+            .y = rng.random().float(f32) * 2.0 - 1.0,
+        };
+        b.*.mass = 1.0;
+        b.*.radius = 0.1;
+        b.*.color = RGB{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+    }
+
+    // Initialize particles at random positions
+    for (&state.particles) |*p| {
+        p.pos = vec2{
+            .x = rng.random().float(f32) * 2.0 - 1.0,
+            .y = rng.random().float(f32) * 2.0 - 1.0,
+        };
+        p.vel = vec2{ .x = 0.0, .y = 0.0 };
+        p.mass = 0.1;
+        p.radius = 0.05;
+        p.color = RGB{ .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+    }
 }
 
 export fn frame() callconv(.C) void {
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
-    // Update bodies
-    for (state.bodies[0..state.num_bodies]) |*b| {
-        b.pos.x += b.vel.x * (1.0 / 60.0);
-        b.pos.y += b.vel.y * (1.0 / 60.0);
-        // Handle boundary conditions
-        if (b.pos.x < -1.0 or b.pos.x > 1.0) {
-            b.vel.x = -b.vel.x;
+    // Update particles based on gravity from bodies
+    for (&state.particles) |*p| {
+        var force = vec2{ .x = 0.0, .y = 0.0 };
+        for (state.bodies) |b| {
+            const r = b.pos.sub(p.pos);
+            const r_squared = r.lengthSquared();
+            const f = G * b.mass * p.mass / r_squared;
+            force = force.add(r.normalize().scale(f));
         }
-        if (b.pos.y < -1.0 or b.pos.y > 1.0) {
-            b.vel.y = -b.vel.y;
-        }
+        p.vel = p.vel.add(force.scale(1.0 / p.mass));
+        p.pos = p.pos.add(p.vel.scale(1.0 / 60.0));
     }
 
-    // Update particles
-    for (state.particles[0..state.num_particles]) |*p| {
-        p.pos.x += p.vel.x * (1.0 / 60.0);
-        p.pos.y += p.vel.y * (1.0 / 60.0);
-        // Handle boundary conditions
-        if (p.pos.x < -1.0 or p.pos.x > 1.0) {
-            p.vel.x = -p.vel.x;
-        }
-        if (p.pos.y < -1.0 or p.pos.y > 1.0) {
-            p.vel.y = -p.vel.y;
-        }
+    // Render bodies and particles
+    for (state.bodies) |b| {
+        const translation = mat3.translate(b.pos.x, b.pos.y);
+        const scaling = mat3.scale(b.radius, b.radius);
+        const modelMatrix = translation.mul(scaling);
+
+        const uniforms = Uniforms{
+            .modelMatrix = modelMatrix,
+            .color = b.color,
+        };
+        sg.applyUniforms(sg.ShaderStage.vs, 0, &uniforms);
+        sg.draw(0, 6, 1);
     }
 
-    sg.applyPipeline(state.pipeline);
-    sg.applyBindings(state.bindings);
+    for (state.particles) |p| {
+        const translation = mat3.translate(p.pos.x, p.pos.y);
+        const scaling = mat3.scale(p.radius, p.radius);
+        const modelMatrix = translation.mul(scaling);
 
-    renderParticlesAndBodies();
+        const uniforms = Uniforms{
+            .modelMatrix = modelMatrix,
+            .color = p.color,
+        };
+
+        sg.applyUniforms(sg.ShaderStage.vs, 0, &uniforms);
+        sg.draw(0, 6, 1);
+    }
 
     sg.endPass();
     sg.commit();
-}
-
-fn renderParticlesAndBodies() void {
-    // Bind the pipeline and vertex/index buffers
-    sg.applyPipeline(state.pipeline);
-    sg.applyBindings(state.bindings);
-
-    // Loop through and render all bodies
-    for (state.bodies[0..state.num_bodies]) |b| {
-        // Update uniforms for the body
-        var uniforms = BodyUniforms{
-            .modelMatrix = calculateModelMatrix(b),
-            .color = b.color,
-        };
-        sg.applyUniforms(.VertexShader, 0, &uniforms);
-
-        // Draw the body
-        sg.draw(0, b.indexCount, 1);
-    }
-
-    // Loop through and render all particles
-    for (state.particles[0..state.num_particles]) |p| {
-        // Update uniforms for the particle
-        var uniforms = ParticleUniforms{
-            .modelMatrix = calculateModelMatrix(p),
-            .color = p.color,
-        };
-        sg.applyUniforms(.VertexShader, 0, &uniforms);
-
-        // Draw the particle
-        sg.draw(0, p.indexCount, 1);
-    }
 }
 
 export fn cleanup() void {

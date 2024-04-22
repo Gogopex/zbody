@@ -12,6 +12,27 @@ pub const Vec2 = extern struct {
     pub fn new() Vec2 {
         return Vec2{ .x = 0.0, .y = 0.0 };
     }
+
+    pub fn sub(a: Vec2, b: Vec2) Vec2 {
+        return Vec2{ .x = a.x - b.x, .y = a.y - b.y };
+    }
+
+    pub fn add(a: Vec2, b: Vec2) Vec2 {
+        return Vec2{ .x = a.x + b.x, .y = a.y + b.y };
+    }
+
+    pub fn lengthSquared(v: Vec2) f32 {
+        return v.x * v.x + v.y * v.y;
+    }
+
+    pub fn normalize(v: Vec2) Vec2 {
+        const len = math.sqrt(v.x * v.x + v.y * v.y);
+        return Vec2{ .x = v.x / len, .y = v.y / len };
+    }
+
+    pub fn scale(v: Vec2, s: f32) Vec2 {
+        return Vec2{ .x = v.x * s, .y = v.y * s };
+    }
 };
 
 pub const Mat3 = extern struct {
