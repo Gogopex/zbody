@@ -8,15 +8,31 @@ const sapp = sokol.app;
 const sglue = sokol.glue;
 const slog = sokol.log;
 const sgl = sokol.gl;
+const math = @import("std").math;
 
-pub const RGB = struct {
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
+const MAX_BODIES = 3;
+const G = 6.67430e-11;
 
-    pub fn new() RGB {
-        return RGB{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+const State = struct {
+    // instantiate bodies with 3 elements
+    var bodies: [MAX_BODIES]Body = .{
+        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 3.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
+        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 3.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
+        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 3.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
+    };
+    var bindings: sg.Bindings = .{};
+    var pipeline: sg.Pipeline = .{};
+    var pass_action: sg.PassAction = .{};
+};
+
+pub const RGBA = struct {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+
+    pub fn new() RGBA {
+        return RGBA{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
     }
 };
 
@@ -25,27 +41,7 @@ const Body = struct {
     vel: vec2,
     mass: f32,
     radius: f32,
-    color: RGB,
-};
-
-const MAX_BODIES = 3;
-const G = 6.67430e-11;
-
-const State = struct {
-    // instantiate bodies with 3 elements
-    var bodies: [MAX_BODIES]Body = .{
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 0.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 0.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 0.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
-    };
-    var bindings: sg.Bindings = .{};
-    var pipeline: sg.Pipeline = .{};
-    var pass_action: sg.PassAction = .{};
-};
-
-const Uniforms = struct {
-    modelMatrix: mat3,
-    color: RGB,
+    color: RGBA,
 };
 
 export fn init() void {
@@ -53,62 +49,67 @@ export fn init() void {
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
     });
-
     sgl.setup(.{
         .logger = .{ .func = slog.func },
     });
+    State.pass_action.colors[0] = .{
+        .load_action = .CLEAR,
+        .clear_value = .{ .r = 0, .g = 0, .b = 0 },
+    };
 
     // Initialize bodies at random positions
-    var rng = std.rand.DefaultPrng.init(0);
+    // var rng = std.rand.DefaultPrng.init(0);
     for (&State.bodies) |*b| {
         b.*.pos = vec2{
-            .x = rng.random().float(f32) * 800.0, // Range from 0 to 800
-            .y = rng.random().float(f32) * 600.0, // Range from 0 to 600
+            .x = -7.0, // Range from 0 to 800
+            .y = 2.0, // Range from 0 to 600
         };
         b.*.mass = 1.0;
         b.*.radius = 50.0; // Set radius to 50 pixels for bodies
-        b.*.color = RGB{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }; // Red color for bodies
+        b.*.color = RGBA{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 }; // Red color for bodies
     }
-
-    State.pass_action.colors[0].load_action = .CLEAR;
-    State.pass_action.colors[0].clear_value = sg.Color{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 }; // Clear to black
-    State.pass_action.depth.load_action = .DONTCARE;
-    State.pass_action.stencil.load_action = .DONTCARE;
 }
 
 export fn frame() callconv(.C) void {
-    sg.beginPass(.{ .action = State.pass_action, .swapchain = sglue.swapchain() });
+    const frame_count = sapp.frameCount();
+    std.debug.print("Frame count: {}\n", .{frame_count});
 
-    std.debug.print("Rendering frame\n", .{});
+    sgl.defaults();
+    sgl.beginPoints();
 
-    const bodyRadius = pixelsToWorldUnits(50.0, 600.0, 2.0);
+    // const angle: f32 = @floatFromInt(sapp.frameCount() % 360);
+    // var psize: f32 = 5;
+    // var idx: usize = 0;
+    // while (idx < 300) : (idx += 1) {
+    //     const a = sgl.asRadians(angle + @as(f32, @floatFromInt(idx)));
+    //     const r = math.sin(a * 4.0);
+    //     const s = math.sin(a);
+    //     const c = math.cos(a);
+    //     const x = s * r;
+    //     const y = c * r;
+    //     sgl.c3f(10.0, 0.0, 0.0);
+    //     sgl.pointSize(psize);
+    //     sgl.v2f(x, y);
+    //     psize *= 1.005;
+    //     std.debug.print("x: {}, y: {}\n", .{ x, y });
+    // }
 
-    // Update bodies based on gravity from bodies
+    updatePhysics();
+
     for (0..MAX_BODIES) |i| {
-        var force = vec2{ .x = 0.0, .y = 0.0 };
-        for (0..MAX_BODIES) |j| {
-            if (i != j) {
-                const r = State.bodies[j].pos.sub(State.bodies[i].pos);
-                const r_squared = r.lengthSquared();
-                if (r_squared > 0.0001) {
-                    const f = G * State.bodies[j].mass * State.bodies[i].mass / r_squared;
-                    force = force.add(r.normalize().scale(f));
-                }
-            }
-        }
-        State.bodies[i].vel = State.bodies[i].vel.add(force.scale(1.0 / State.bodies[i].mass));
-        State.bodies[i].pos = State.bodies[i].pos.add(State.bodies[i].vel.scale(1.0 / 60.0)); // Assuming 60 FPS
+        sgl.c4b(State.bodies[i].color.r, State.bodies[i].color.g, State.bodies[i].color.b, State.bodies[i].color.a);
+        sgl.v2f(State.bodies[i].pos.x, State.bodies[i].pos.y);
+        sgl.pointSize(5);
+        std.debug.print("Body {} at x: {}, y: {}\n", .{ i, State.bodies[i].pos.x, State.bodies[i].pos.y });
+        std.debug.print("Body {} mass: {}\n", .{ i, State.bodies[i].mass });
+        std.debug.print("Body {} radius: {}\n", .{ i, State.bodies[i].radius });
+        std.debug.print("Body {} color: r: {}, g: {}, b: {}, a: {}\n", .{ i, State.bodies[i].color.r, State.bodies[i].color.g, State.bodies[i].color.b, State.bodies[i].color.a });
     }
 
-    // debug
-    drawCircle(vec2{ .x = 15.0, .y = 15.0 }, bodyRadius, 12, RGB{ .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 });
+    sgl.end();
 
-    // Render bodies
-    for (State.bodies) |b| {
-        std.debug.print("Body position: ({}, {})\n", .{ b.pos.x, b.pos.y });
-        drawCircle(b.pos, bodyRadius, 12, b.color);
-    }
-
+    sg.beginPass(.{ .action = State.pass_action, .swapchain = sglue.swapchain() });
+    sgl.draw();
     sg.endPass();
     sg.commit();
 }
@@ -118,62 +119,36 @@ export fn cleanup() void {
     sg.shutdown();
 }
 
+export fn updatePhysics() void {
+    for (0..State.bodies.len) |i| {
+        var force = vec2{ .x = 0.0, .y = 0.0 };
+        for (0..State.bodies.len) |j| {
+            if (i != j) {
+                const r = State.bodies[j].pos.sub(State.bodies[i].pos);
+                const distanceSquared = r.x * r.x + r.y * r.y;
+                if (distanceSquared > 0.0001) {
+                    const distance = math.sqrt(distanceSquared);
+                    const f = G * State.bodies[j].mass * State.bodies[i].mass / distanceSquared;
+                    force = force.add(r.scale(f / distance));
+                }
+            }
+        }
+        // Update velocity and position
+        State.bodies[i].vel = State.bodies[i].vel.add(force.scale(1.0 / State.bodies[i].mass));
+        State.bodies[i].pos = State.bodies[i].pos.add(State.bodies[i].vel.scale(1.0 / 60.0)); // Assuming 60 FPS
+        std.debug.print("Body: {}, x: {}, y: {}\n", .{ i, State.bodies[i].pos.x, State.bodies[i].pos.y });
+    }
+}
+
 pub fn main() !void {
     sapp.run(.{
         .init_cb = init,
         .frame_cb = frame,
         .cleanup_cb = cleanup,
-        .width = 800,
-        .height = 600,
+        .width = 512,
+        .height = 512,
         .sample_count = 4,
-        .window_title = "N-Body Simulation",
+        .window_title = "Z-Body Simulation",
+        .logger = .{ .func = slog.func },
     });
-}
-
-fn calculateModelMatrix(entity: anytype) mat3 {
-    const translation = mat3.translate(entity.pos.x, entity.pos.y);
-    const scaling = mat3.scale(entity.radius, entity.radius);
-    const modelMatrix = translation.mul(scaling);
-    return modelMatrix;
-}
-
-pub fn drawCircle(center: vec2, radius: f32, segments: u32, color: RGB) void {
-    sgl.sgl_c4f(color.r, color.g, color.b, color.a);
-    sgl.sgl_begin_triangles();
-    std.debug.print("Drawing circle at: ({}, {})\n", .{ center.x, center.y });
-    var i: u32 = 0;
-    while (i < segments) : (i += 1) {
-        const segments_f32 = @as(f32, @floatFromInt(segments));
-        const i_f32 = @as(f32, @floatFromInt(i));
-        // Central vertex
-        sgl.sgl_v2f(center.x, center.y);
-
-        // First vertex on the edge of the circle
-        const angle1: f32 = 2.0 * std.math.pi * (i_f32 / segments_f32);
-        const x1 = center.x + radius * std.math.cos(angle1);
-        const y1 = center.y + radius * std.math.sin(angle1);
-        sgl.sgl_v2f(x1, y1);
-
-        // Second vertex on the edge of the circle
-        const angle2 = 2.0 * std.math.pi * ((i_f32 + 1) / segments_f32);
-        const x2 = center.x + radius * std.math.cos(angle2);
-        const y2 = center.y + radius * std.math.sin(angle2);
-        sgl.sgl_v2f(x2, y2);
-    }
-    sgl.sgl_end();
-}
-
-fn pixelsToWorldUnits(pixels: f32, screenSize: f32, worldSize: f32) f32 {
-    return (pixels / screenSize) * worldSize;
-}
-
-pub fn getOrthographicProjectionMatrix(width: f32, height: f32) mat4 {
-    const left = 0.0;
-    const right = width;
-    const bottom = height;
-    const top = 0.0;
-    const near = -1.0;
-    const far = 1.0;
-
-    return mat4.orthographic(left, right, bottom, top, near, far);
 }
