@@ -43,7 +43,7 @@ const Body = struct {
     fn updateForce(this: *Body, other: *Body) vec2 {
         const r = other.pos.sub(this.pos);
         const distanceSquared = r.lengthSquared();
-        if (distanceSquared > 0.00001) { // Avoid division by zero
+        if (distanceSquared > 0.00001) {
             const f = G * this.mass * other.mass / distanceSquared;
             return r.normalize().scale(f);
         }
