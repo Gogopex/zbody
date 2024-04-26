@@ -39,7 +39,19 @@ const Body = struct {
     mass: f32,
     radius: f32,
     color: RGBA,
+
+    fn updateForce(this: *Body, other: *Body) vec2 {
+        const r = other.pos.sub(this.pos);
+        const distanceSquared = r.lengthSquared();
+        if (distanceSquared > 0.00001) { // Avoid division by zero
+            const f = G * this.mass * other.mass / distanceSquared;
+            return r.normalize().scale(f);
+        }
+        return vec2{ .x = 0.0, .y = 0.0 };
+    }
 };
+
+var bodies: [MAX_BODIES]Body = undefined;
 
 export fn init() void {
     sg.setup(.{
@@ -77,6 +89,7 @@ export fn frame() callconv(.C) void {
         sgl.c3f(10.0, 0.0, 0.0);
         sgl.v2f(State.bodies[i].pos.x, State.bodies[i].pos.y);
         sgl.pointSize(State.bodies[i].radius);
+        std.debug.print("Body #{}: x: {}, y: {}\n", .{ i, State.bodies[i].pos.x, State.bodies[i].pos.y });
     }
 
     sgl.end();
@@ -93,37 +106,24 @@ export fn cleanup() void {
 }
 
 export fn updatePhysics() void {
-    const min_distance = 0.00001;
-    var force = vec2{ .x = 0.0, .y = 0.0 };
-
-    for (0..State.bodies.len) |i| {
-        for (0..State.bodies.len) |j| {
-            // Calculate the gravitational force between bodies i and j
-            // F = G * m1 * m2 / r^2
-            // G = the gravitational constant
-            // m1 and m2 = masses of the bodies
-            //  r = distance between them
+    var forces: [MAX_BODIES]vec2 = undefined;
+    for (0..MAX_BODIES) |i| {
+        forces[i] = vec2{ .x = 0.0, .y = 0.0 };
+        for (0..MAX_BODIES) |j| {
             if (i != j) {
-                const r = State.bodies[j].pos.sub(State.bodies[i].pos);
-                const distance = math.sqrt(r.lengthSquared());
-                if (distance > min_distance) {
-                    const distanceSquared = r.lengthSquared();
-                    const f = SMALL_G * State.bodies[j].mass * State.bodies[i].mass / distanceSquared;
-                    force = force.add(r.scale(f / distance));
-                }
+                const force = bodies[i].updateForce(&bodies[j]);
+                forces[i] = forces[i].add(force);
             }
         }
+        std.debug.print("Body {}: Force x: {}, y: {}\n", .{ i, forces[i].x, forces[i].y });
+    }
 
-        // Update velocity and position
-        State.bodies[i].vel = State.bodies[i].vel.add(force.scale(1.0 / State.bodies[i].mass));
-        State.bodies[i].vel = State.bodies[i].vel.scale(damping);
-        State.bodies[i].pos = State.bodies[i].pos.add(State.bodies[i].vel.scale(1.0 / 240.0));
-
-        // Wrap positions around screen edges
-        State.bodies[i].pos.x = if (State.bodies[i].pos.x < 0) sapp.widthf() + State.bodies[i].pos.x else if (State.bodies[i].pos.x > sapp.widthf()) State.bodies[i].pos.x - sapp.widthf() else State.bodies[i].pos.x;
-        State.bodies[i].pos.y = if (State.bodies[i].pos.y < 0) sapp.heightf() + State.bodies[i].pos.y else if (State.bodies[i].pos.y > sapp.heightf()) State.bodies[i].pos.y - sapp.heightf() else State.bodies[i].pos.y;
-
-        std.debug.print("Body: {}, x: {}, y: {}, mass: {}\n", .{ i, State.bodies[i].pos.x, State.bodies[i].pos.y, State.bodies[i].mass });
+    const dt: f32 = 0.1; // Example time step
+    for (0..MAX_BODIES) |i| {
+        const acceleration = forces[i].scale(1.0 / bodies[i].mass);
+        bodies[i].vel = bodies[i].vel.add(acceleration.scale(dt));
+        bodies[i].pos = bodies[i].pos.add(bodies[i].vel.scale(dt));
+        std.debug.print("Body {}: Pos x: {}, y: {}, Vel x: {}, y: {}\n", .{ i, bodies[i].pos.x, bodies[i].pos.y, bodies[i].vel.x, bodies[i].vel.y });
     }
 }
 
@@ -132,8 +132,8 @@ pub fn main() !void {
         .init_cb = init,
         .frame_cb = frame,
         .cleanup_cb = cleanup,
-        .width = 512,
-        .height = 512,
+        .width = 700,
+        .height = 700,
         .sample_count = 4,
         .window_title = "Z-Body Simulation",
         .logger = .{ .func = slog.func },
