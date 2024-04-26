@@ -10,17 +10,13 @@ const slog = sokol.log;
 const sgl = sokol.gl;
 const math = @import("std").math;
 
-const MAX_BODIES = 3;
+const MAX_BODIES = 100;
 const G = 6.67430e-11;
-const SMALL_G = 6.67430e-7;
-const damping = 0.9999;
+const SMALL_G = 6.67430e-4;
+const damping = 0.99;
 
 const State = struct {
-    var bodies: [MAX_BODIES]Body = .{
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 3.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 3.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
-        .{ .pos = .{ .x = 0.0, .y = 0.0 }, .mass = 0.0, .radius = 3.0, .color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 }, .vel = .{ .x = 0.0, .y = 0.0 } },
-    };
+    var bodies: [MAX_BODIES]Body = undefined;
     var bindings: sg.Bindings = .{};
     var pipeline: sg.Pipeline = .{};
     var pass_action: sg.PassAction = .{};
@@ -58,16 +54,13 @@ export fn init() void {
         .clear_value = .{ .r = 0, .g = 0, .b = 0 },
     };
 
-    // Initialize bodies at random positions
-    // var rng = std.rand.DefaultPrng.init(42);
-    for (&State.bodies) |*b| {
-        // const base = rng.random().float(f32);
-        // std.debug.print("base: {}\n", .{base});
-        // std.debug.print("(base * (0.80 - 0.15) + 0.15): {}\n", .{base * (0.80 - 0.15) + 0.15});
-        b.*.pos.x = 250.0;
-        b.*.pos.y = 250.0;
-        b.*.radius = 50.0;
-        b.*.color = RGBA{ .r = 10.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+    var rng = std.rand.DefaultPrng.init(42);
+
+    for (0..MAX_BODIES) |i| {
+        const base = rng.random().float(f32);
+        State.bodies[i] = Body{ .pos = vec2{ .x = (sapp.widthf() / 2) * (base * (100 - 0.15) + 0.15), .y = (sapp.heightf() / 2) * (base * (0.80 - 0.15) + 0.15) }, .mass = 10, .radius = 5, .color = RGBA{ .r = 10.0, .g = 0.0, .b = 0.0, .a = 255 }, .vel = vec2{ .x = 0.5, .y = 0.5 } };
+        std.debug.print("mass: {}\n", .{State.bodies[i].mass});
+        std.debug.print("x: {}, y: {}\n", .{ State.bodies[i].pos.x, State.bodies[i].pos.y });
     }
 }
 
@@ -78,31 +71,12 @@ export fn frame() callconv(.C) void {
     sgl.defaults();
     sgl.beginPoints();
 
-    // const angle: f32 = @floatFromInt(sapp.frameCount() % 360);
-    // var psize: f32 = 5;
-    // var idx: usize = 0;
-    // while (idx < 300) : (idx += 1) {
-    //     const a = sgl.asRadians(angle + @as(f32, @floatFromInt(idx)));
-    //     const r = math.sin(a * 4.0);
-    //     const s = math.sin(a);
-    //     const c = math.cos(a);
-    //     const x = s * r;
-    //     const y = c * r;
-    //     std.debug.print("x: {}, y: {}\n", .{ x, y });
-    //     sgl.c3f(10.0, 0.0, 0.0);
-    //     sgl.pointSize(psize);
-    //     sgl.v2f(x, y);
-    //     psize *= 1.005;
-    //     std.debug.print("x: {}, y: {}\n", .{ x, y });
-    // }
-
     updatePhysics();
 
     for (0..MAX_BODIES) |i| {
-        // sgl.c4b(State.bodies[i].color.r, State.bodies[i].color.g, State.bodies[i].color.b, 1);
         sgl.c3f(10.0, 0.0, 0.0);
         sgl.v2f(State.bodies[i].pos.x, State.bodies[i].pos.y);
-        sgl.pointSize(50);
+        sgl.pointSize(State.bodies[i].radius);
     }
 
     sgl.end();
@@ -119,14 +93,21 @@ export fn cleanup() void {
 }
 
 export fn updatePhysics() void {
+    const min_distance = 0.00001;
+    var force = vec2{ .x = 0.0, .y = 0.0 };
+
     for (0..State.bodies.len) |i| {
-        var force = vec2{ .x = 0.0, .y = 0.0 };
         for (0..State.bodies.len) |j| {
+            // Calculate the gravitational force between bodies i and j
+            // F = G * m1 * m2 / r^2
+            // G = the gravitational constant
+            // m1 and m2 = masses of the bodies
+            //  r = distance between them
             if (i != j) {
                 const r = State.bodies[j].pos.sub(State.bodies[i].pos);
                 const distance = math.sqrt(r.lengthSquared());
-                const distanceSquared = r.lengthSquared();
-                if (distanceSquared > 0.0001) {
+                if (distance > min_distance) {
+                    const distanceSquared = r.lengthSquared();
                     const f = SMALL_G * State.bodies[j].mass * State.bodies[i].mass / distanceSquared;
                     force = force.add(r.scale(f / distance));
                 }
@@ -136,13 +117,13 @@ export fn updatePhysics() void {
         // Update velocity and position
         State.bodies[i].vel = State.bodies[i].vel.add(force.scale(1.0 / State.bodies[i].mass));
         State.bodies[i].vel = State.bodies[i].vel.scale(damping);
-        State.bodies[i].pos = State.bodies[i].pos.add(State.bodies[i].vel.scale(1.0 / 60.0));
+        State.bodies[i].pos = State.bodies[i].pos.add(State.bodies[i].vel.scale(1.0 / 240.0));
 
         // Wrap positions around screen edges
-        // State.bodies[i].pos.x = if (State.bodies[i].pos.x < 0) sapp.widthf() + State.bodies[i].pos.x else @mod(State.bodies[i].pos.x, sapp.widthf());
-        // State.bodies[i].pos.y = if (State.bodies[i].pos.y < 0) sapp.heightf() + State.bodies[i].pos.y else @mod(State.bodies[i].pos.y, sapp.heightf());
+        State.bodies[i].pos.x = if (State.bodies[i].pos.x < 0) sapp.widthf() + State.bodies[i].pos.x else if (State.bodies[i].pos.x > sapp.widthf()) State.bodies[i].pos.x - sapp.widthf() else State.bodies[i].pos.x;
+        State.bodies[i].pos.y = if (State.bodies[i].pos.y < 0) sapp.heightf() + State.bodies[i].pos.y else if (State.bodies[i].pos.y > sapp.heightf()) State.bodies[i].pos.y - sapp.heightf() else State.bodies[i].pos.y;
 
-        std.debug.print("Body: {}, x: {}, y: {}\n", .{ i, State.bodies[i].pos.x, State.bodies[i].pos.y });
+        std.debug.print("Body: {}, x: {}, y: {}, mass: {}\n", .{ i, State.bodies[i].pos.x, State.bodies[i].pos.y, State.bodies[i].mass });
     }
 }
 
