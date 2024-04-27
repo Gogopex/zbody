@@ -33,6 +33,10 @@ pub const Vec2 = extern struct {
     pub fn scale(v: Vec2, s: f32) Vec2 {
         return Vec2{ .x = v.x * s, .y = v.y * s };
     }
+
+    pub fn length(v: Vec2) f32 {
+        return math.sqrt(v.x * v.x + v.y * v.y);
+    }
 };
 
 pub const Mat3 = extern struct {
