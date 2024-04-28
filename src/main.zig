@@ -12,10 +12,15 @@ const math = @import("std").math;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-const MAX_BODIES = 5;
+const MAX_BODIES = 10;
 const G = 6.67430e-11;
 const SMALL_G = 6.67430e-4;
 const damping = 0.99;
+
+const QuadTreeError = error{
+    OutOfMemory,
+    PositionOutOfBounds,
+};
 
 const State = struct {
     var bindings: sg.Bindings = .{};
@@ -77,7 +82,7 @@ const QuadTree = struct {
     se: ?*QuadTree,
 
     fn clear(this: *QuadTree) void {
-        this.bodies.items = []Body{};
+        this.bodies.items = &[_]Body{};
         this.centerOfMass = vec2.zero();
         this.totalMass = 0.0;
         this.divided = false;
@@ -123,10 +128,10 @@ const QuadTree = struct {
         const y = this.boundary.y;
         const w = this.boundary.width / 2;
         const h = this.boundary.height / 2;
-        this.nw = QuadTree{ .boundary = Rect{ .x = x, .y = y, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(std.heap.page_allocator()), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
-        this.ne = QuadTree{ .boundary = Rect{ .x = x + w, .y = y, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(std.heap.page_allocator()), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
-        this.sw = QuadTree{ .boundary = Rect{ .x = x, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(std.heap.page_allocator()), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
-        this.se = QuadTree{ .boundary = Rect{ .x = x + w, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(std.heap.page_allocator()), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        this.nw = QuadTree{ .boundary = Rect{ .x = x, .y = y, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        this.ne = QuadTree{ .boundary = Rect{ .x = x + w, .y = y, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        this.sw = QuadTree{ .boundary = Rect{ .x = x, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        this.se = QuadTree{ .boundary = Rect{ .x = x + w, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
         this.divided = true;
     }
 
@@ -176,9 +181,9 @@ const QuadTree = struct {
                 }
             }
         } else {
-            for (this.bodies.items) |other| {
-                if (other != body.*) {
-                    const f = body.updateForce(&other);
+            for (this.bodies.items) |*other| { // Ensure other is a pointer to Body
+                if (other != body) { // Compare pointers directly
+                    const f = body.updateForce(other);
                     force.* = force.*.add(f);
                 }
             }
@@ -186,7 +191,7 @@ const QuadTree = struct {
     }
 };
 
-var bodies: [MAX_BODIES]Body = undefined;
+var bodies: std.ArrayList(Body) = undefined;
 var quadtree: QuadTree = undefined;
 
 export fn init() void {
@@ -202,23 +207,63 @@ export fn init() void {
         .clear_value = .{ .r = 0, .g = 0, .b = 0 },
     };
 
-    quadtree = QuadTree{ .boundary = Rect{ .x = 0, .y = 0, .width = 100, .height = 100 }, .depth = 0, .bodies = std.ArrayList(Body).init(std.heap.page_allocator), .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+    quadtree = QuadTree{ .boundary = Rect{ .x = 0, .y = 0, .width = 100, .height = 100 }, .depth = 0, .bodies = bodies, .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+
+    for (bodies.items) |body| {
+        const success = quadtree.insert(body) catch |err| {
+            std.debug.print("Insertion failed with error: {}\n", .{err});
+            continue;
+        };
+        if (!success) {
+            std.debug.print("Failed to insert body.\n", .{});
+        }
+    }
 }
 
-export fn frame() callconv(.C) void {
+fn initializeBodies() QuadTreeError!std.ArrayList(Body) {
+    bodies = std.ArrayList(Body).init(std.heap.page_allocator);
+    var prng = std.rand.DefaultPrng.init(42);
+    for (0..MAX_BODIES) |_| {
+        const x = prng.random().intRangeLessThan(f32, 0, 100);
+        const y = prng.random().intRangeLessThan(f32, 0, 100);
+        const vel_x = prng.random().intRangeLessThan(f32, -1, 1);
+        const vel_y = prng.random().intRangeLessThan(f32, -1, 1);
+        const mass = prng.random().intRangeLessThan(f32, 1, 10);
+        const radius = prng.random().intRangeLessThan(f32, 1, 5);
+        const color = RGBA.new();
+        const force = vec2.zero();
+        const body = Body{ .pos = vec2{ .x = x, .y = y }, .vel = vec2{ .x = vel_x, .y = vel_y }, .mass = mass, .radius = radius, .color = color, .force = force };
+        try bodies.append(body) catch |err| {
+            std.debug.print("Error appending body: {}\n", .{err});
+            return;
+        };
+    }
+
+    return bodies;
+}
+
+export fn frame() void {
     const frame_count = sapp.frameCount();
     std.debug.print("Frame count: {}\n", .{frame_count});
 
     sgl.defaults();
     sgl.beginPoints();
 
-    updatePhysics();
+    updatePhysics() catch |err| {
+        std.debug.print("Failed to update physics: {}\n", .{err});
+    };
 
-    for (0..MAX_BODIES) |i| {
-        sgl.c3f(10.0, 0.0, 0.0);
-        sgl.v2f(quadtree.bodies.items[i].pos.x, quadtree.bodies.items[i].pos.y);
-        sgl.pointSize(quadtree.bodies.items[i].radius);
-        std.debug.print("Body #{}: x: {}, y: {}\n", .{ i, quadtree.bodies.items[i].pos.x, quadtree.bodies.items[i].pos.y });
+    std.debug.print("Quadtree: {}\n", .{quadtree});
+    std.debug.print("Bodies: {}\n", .{quadtree.bodies.items.len});
+    if (quadtree.bodies.items.len > 0) {
+        for (0..quadtree.bodies.items.len) |i| {
+            sgl.c3f(10.0, 0.0, 0.0);
+            sgl.v2f(quadtree.bodies.items[i].pos.x, quadtree.bodies.items[i].pos.y);
+            sgl.pointSize(quadtree.bodies.items[i].radius);
+            std.debug.print("Body #{}: x: {}, y: {}\n", .{ i, quadtree.bodies.items[i].pos.x, quadtree.bodies.items[i].pos.y });
+        }
+    } else {
+        std.debug.print("No bodies to render.\n", .{});
     }
 
     sgl.end();
@@ -234,28 +279,39 @@ export fn cleanup() void {
     sg.shutdown();
 }
 
-export fn updatePhysics() void {
+fn updatePhysics() QuadTreeError!void {
     quadtree.clear();
 
     for (quadtree.bodies.items) |body| {
-        try quadtree.insert(body);
+        const success = quadtree.insert(body) catch |err| {
+            std.debug.print("Insertion failed with error: {}\n", .{err});
+            continue; // Skip this iteration and continue with the next
+        };
+        if (!success) {
+            std.debug.print("Failed to insert body.\n", .{});
+        }
     }
 
-    for (&bodies) |*body| {
+    for (quadtree.bodies.items) |*body| {
         var force = vec2.zero();
         quadtree.calculateForce(body, &force);
         body.force = force;
     }
 
-    const dt: f32 = 0.1; // Example time step
-    for (&bodies) |*body| {
+    const dt: f32 = 0.1;
+    for (quadtree.bodies.items) |*body| {
         const acceleration = body.force.scale(1.0 / body.mass);
         body.vel = body.vel.add(acceleration.scale(dt));
         body.pos = body.pos.add(body.vel.scale(dt));
     }
 }
 
-pub fn main() !void {
+pub fn main() void {
+    bodies = initializeBodies() catch |err| {
+        std.debug.print("Failed to initialize bodies: {}\n", .{err});
+        return;
+    };
+
     sapp.run(.{
         .init_cb = init,
         .frame_cb = frame,

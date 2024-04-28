@@ -7,10 +7,6 @@
         "build.zig.zon",
     },
     .dependencies = .{
-        .sokol = .{ .url = "git+https://github.com/floooh/sokol-zig.git#a9860f4b2962c7522ea5babb22a8f0cefa24348f", .hash = "1220f60ad2131ae835289a0521b8c252ae3f8229dfac20b9803a498202ca4a1fdedc" },
-        // .zlm = .{
-        //     .url = "git+https://github.com/ziglibs/zlm#833031bfdbfd24526e4115a59459f9c360d7b824",
-        //     .hash = "12205dbec9f917a3ab61ca65900dce7a04c9ec4348d0e2241a9c246b9c2d131d061b"
-        // }
+        .sokol = .{ .url = "git+https://github.com/floooh/sokol-zig.git#18f4f3d6188f4faff2fab6bd7f8abc58e6e26b04", .hash = "12204b76dc14c74da9d61d01b5bd7a4fbfd0614aa7cc0a7428de0742129203ca5008" },
     },
 }
