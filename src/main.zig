@@ -195,6 +195,7 @@ var bodies: std.ArrayList(Body) = undefined;
 var quadtree: QuadTree = undefined;
 
 export fn init() void {
+    std.debug.print("init", .{});
     sg.setup(.{
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
@@ -307,10 +308,28 @@ fn updatePhysics() QuadTreeError!void {
 }
 
 pub fn main() void {
-    bodies = initializeBodies() catch |err| {
-        std.debug.print("Failed to initialize bodies: {}\n", .{err});
-        return;
-    };
+    const gpa = std.heap.page_allocator;
+    bodies = std.ArrayList(Body).init(gpa);
+
+    defer bodies.deinit();
+
+    var prng = std.rand.DefaultPrng.init(42);
+    for (0..MAX_BODIES) |_| {
+        const x = prng.random().float(f32) * 100;
+        const y = prng.random().float(f32) * 100;
+        const vel_x = prng.random().float(f32) * 2 - 1;
+        const vel_y = prng.random().float(f32) * 2 - 1;
+        const mass = prng.random().float(f32) * 10 + 1;
+        const radius = prng.random().float(f32) * 5 + 1;
+        const color = RGBA.new();
+        const force = vec2.zero();
+        const body = Body{ .pos = vec2{ .x = x, .y = y }, .vel = vec2{ .x = vel_x, .y = vel_y }, .mass = mass, .radius = radius, .color = color, .force = force };
+        const res = bodies.append(body) catch |err| {
+            std.debug.print("Error appending body: {}\n", .{err});
+            break;
+        };
+        _ = res;
+    }
 
     sapp.run(.{
         .init_cb = init,
