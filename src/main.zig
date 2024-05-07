@@ -133,6 +133,13 @@ const QuadTree = struct {
         this.sw = QuadTree{ .boundary = Rect{ .x = x, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
         this.se = QuadTree{ .boundary = Rect{ .x = x + w, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
         this.divided = true;
+
+        // Redistribute existing bodies into new quadrants
+        for (this.bodies.items) |body| {
+            _ = this.insert(body);
+        }
+        // Clear the original bodies list as they are now in the sub-quadrants
+        this.bodies.deinit();
     }
 
     fn query(this: *QuadTree, range: Rect, found: *std.ArrayList(Body)) void {
@@ -181,8 +188,8 @@ const QuadTree = struct {
                 }
             }
         } else {
-            for (this.bodies.items) |*other| { // Ensure other is a pointer to Body
-                if (other != body) { // Compare pointers directly
+            for (this.bodies.items) |*other| {
+                if (other != body) {
                     const f = body.updateForce(other);
                     force.* = force.*.add(f);
                 }
@@ -208,6 +215,32 @@ export fn init() void {
         .clear_value = .{ .r = 0, .g = 0, .b = 0 },
     };
 
+    const gpa = std.heap.page_allocator;
+    bodies = std.ArrayList(Body).init(gpa);
+
+    defer bodies.deinit();
+
+    var prng = std.rand.DefaultPrng.init(42);
+    for (0..MAX_BODIES) |_| {
+        const x = prng.random().float(f32) * 100;
+        const y = prng.random().float(f32) * 100;
+        const vel_x = prng.random().float(f32) * 2 - 1;
+        const vel_y = prng.random().float(f32) * 2 - 1;
+        const mass = prng.random().float(f32) * 10 + 1;
+        const radius = prng.random().float(f32) * 5 + 1;
+        const color = RGBA.new();
+        const force = vec2.zero();
+        const body = Body{ .pos = vec2{ .x = x, .y = y }, .vel = vec2{ .x = vel_x, .y = vel_y }, .mass = mass, .radius = radius, .color = color, .force = force };
+        const res = bodies.append(body) catch |err| {
+            std.debug.print("Error appending body: {}\n", .{err});
+            break;
+        };
+        _ = res;
+    }
+
+    //print bodies
+    std.debug.print("bodies: {}", .{bodies});
+
     quadtree = QuadTree{ .boundary = Rect{ .x = 0, .y = 0, .width = 100, .height = 100 }, .depth = 0, .bodies = bodies, .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
 
     for (bodies.items) |body| {
@@ -219,28 +252,6 @@ export fn init() void {
             std.debug.print("Failed to insert body.\n", .{});
         }
     }
-}
-
-fn initializeBodies() QuadTreeError!std.ArrayList(Body) {
-    bodies = std.ArrayList(Body).init(std.heap.page_allocator);
-    var prng = std.rand.DefaultPrng.init(42);
-    for (0..MAX_BODIES) |_| {
-        const x = prng.random().intRangeLessThan(f32, 0, 100);
-        const y = prng.random().intRangeLessThan(f32, 0, 100);
-        const vel_x = prng.random().intRangeLessThan(f32, -1, 1);
-        const vel_y = prng.random().intRangeLessThan(f32, -1, 1);
-        const mass = prng.random().intRangeLessThan(f32, 1, 10);
-        const radius = prng.random().intRangeLessThan(f32, 1, 5);
-        const color = RGBA.new();
-        const force = vec2.zero();
-        const body = Body{ .pos = vec2{ .x = x, .y = y }, .vel = vec2{ .x = vel_x, .y = vel_y }, .mass = mass, .radius = radius, .color = color, .force = force };
-        try bodies.append(body) catch |err| {
-            std.debug.print("Error appending body: {}\n", .{err});
-            return;
-        };
-    }
-
-    return bodies;
 }
 
 export fn frame() void {
@@ -286,7 +297,7 @@ fn updatePhysics() QuadTreeError!void {
     for (quadtree.bodies.items) |body| {
         const success = quadtree.insert(body) catch |err| {
             std.debug.print("Insertion failed with error: {}\n", .{err});
-            continue; // Skip this iteration and continue with the next
+            continue;
         };
         if (!success) {
             std.debug.print("Failed to insert body.\n", .{});
@@ -308,29 +319,6 @@ fn updatePhysics() QuadTreeError!void {
 }
 
 pub fn main() void {
-    const gpa = std.heap.page_allocator;
-    bodies = std.ArrayList(Body).init(gpa);
-
-    defer bodies.deinit();
-
-    var prng = std.rand.DefaultPrng.init(42);
-    for (0..MAX_BODIES) |_| {
-        const x = prng.random().float(f32) * 100;
-        const y = prng.random().float(f32) * 100;
-        const vel_x = prng.random().float(f32) * 2 - 1;
-        const vel_y = prng.random().float(f32) * 2 - 1;
-        const mass = prng.random().float(f32) * 10 + 1;
-        const radius = prng.random().float(f32) * 5 + 1;
-        const color = RGBA.new();
-        const force = vec2.zero();
-        const body = Body{ .pos = vec2{ .x = x, .y = y }, .vel = vec2{ .x = vel_x, .y = vel_y }, .mass = mass, .radius = radius, .color = color, .force = force };
-        const res = bodies.append(body) catch |err| {
-            std.debug.print("Error appending body: {}\n", .{err});
-            break;
-        };
-        _ = res;
-    }
-
     sapp.run(.{
         .init_cb = init,
         .frame_cb = frame,
@@ -345,9 +333,7 @@ pub fn main() void {
 
 fn calculateForce(body: Body, force: *vec2) void {
     if (quadtree.divided) {
-        // check if needs subdivision
         if (quadtree.boundary.contains(body.pos)) {
-            // calculate force
             for (0..quadtree.bodies.len) |i| {
                 const other = quadtree.bodies.items[i];
                 if (other != body) {
@@ -356,7 +342,6 @@ fn calculateForce(body: Body, force: *vec2) void {
                 }
             }
         } else {
-            // check if needs subdivision
             if (quadtree.boundary.intersects(body.pos)) {
                 if (quadtree.nw == null) {
                     quadtree.subdivide();
