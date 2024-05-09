@@ -27,6 +27,7 @@ pub const Vec2 = extern struct {
 
     pub fn normalize(v: Vec2) Vec2 {
         const len = math.sqrt(v.x * v.x + v.y * v.y);
+        if (len == 0) return Vec2.zero();
         return Vec2{ .x = v.x / len, .y = v.y / len };
     }
 
@@ -97,13 +98,38 @@ pub const Mat4 = extern struct {
     m: [4][4]f32,
 
     pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Mat4 {
-        var result: Mat4 = undefined;
+        var result = Mat4{
+            .m = [_][4]f32{
+                [_]f32{ 0, 0, 0, 0 },
+                [_]f32{ 0, 0, 0, 0 },
+                [_]f32{ 0, 0, 0, 0 },
+                [_]f32{ 0, 0, 0, 0 },
+            },
+        };
         result.m[0][0] = 2.0 / (right - left);
         result.m[1][1] = 2.0 / (top - bottom);
         result.m[2][2] = -2.0 / (far - near);
         result.m[3][0] = -(right + left) / (right - left);
         result.m[3][1] = -(top + bottom) / (top - bottom);
         result.m[3][2] = -(far + near) / (far - near);
+        result.m[3][3] = 1.0;
         return result;
     }
 };
+
+test "Vec2 normalize zero" {
+    const zero = Vec2.zero();
+    const normalized = Vec2.normalize(zero);
+    try std.testing.expectEqual(zero, normalized);
+}
+
+test "Mat4 orthographic initialization" {
+    const m = Mat4.orthographic(-1, 1, -1, 1, -1, 1);
+    try std.testing.expectApproxEqRel(@as(f32, 1.0), m.m[0][0], 1e-6);
+    try std.testing.expectApproxEqRel(@as(f32, 1.0), m.m[1][1], 1e-6);
+    try std.testing.expectApproxEqRel(@as(f32, -1.0), m.m[2][2], 1e-6);
+    try std.testing.expectApproxEqRel(@as(f32, 0.0), m.m[3][0], 1e-6);
+    try std.testing.expectApproxEqRel(@as(f32, 0.0), m.m[3][1], 1e-6);
+    try std.testing.expectApproxEqRel(@as(f32, 0.0), m.m[3][2], 1e-6);
+    try std.testing.expectApproxEqRel(@as(f32, 1.0), m.m[3][3], 1e-6);
+}

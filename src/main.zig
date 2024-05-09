@@ -1,7 +1,5 @@
 const std = @import("std");
 const sokol = @import("sokol");
-const mat4 = @import("math.zig").Mat4;
-const mat3 = @import("math.zig").Mat3;
 const vec2 = @import("math.zig").Vec2;
 const sg = sokol.gfx;
 const sapp = sokol.app;
@@ -14,7 +12,6 @@ const Allocator = mem.Allocator;
 
 const MAX_BODIES = 10;
 const G = 6.67430e-11;
-const SMALL_G = 6.67430e-4;
 const damping = 0.99;
 
 const QuadTreeError = error{
@@ -54,7 +51,7 @@ pub const RGBA = struct {
     a: u8,
 
     pub fn new() RGBA {
-        return RGBA{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+        return RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
     }
 };
 
@@ -66,6 +63,13 @@ const Rect = struct {
 
     fn contains(this: Rect, point: vec2) bool {
         return point.x >= this.x and point.x <= this.x + this.width and point.y >= this.y and point.y <= this.y + this.height;
+    }
+
+    fn intersects(this: Rect, other: Rect) bool {
+        return this.x < other.x + other.width and
+            this.x + this.width > other.x and
+            this.y < other.y + other.height and
+            this.y + this.height > other.y;
     }
 };
 
@@ -82,7 +86,7 @@ const QuadTree = struct {
     se: ?*QuadTree,
 
     fn clear(this: *QuadTree) void {
-        this.bodies.items = &[_]Body{};
+        this.bodies.clearRetainingCapacity();
         this.centerOfMass = vec2.zero();
         this.totalMass = 0.0;
         this.divided = false;
@@ -128,10 +132,15 @@ const QuadTree = struct {
         const y = this.boundary.y;
         const w = this.boundary.width / 2;
         const h = this.boundary.height / 2;
-        this.nw = QuadTree{ .boundary = Rect{ .x = x, .y = y, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
-        this.ne = QuadTree{ .boundary = Rect{ .x = x + w, .y = y, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
-        this.sw = QuadTree{ .boundary = Rect{ .x = x, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
-        this.se = QuadTree{ .boundary = Rect{ .x = x + w, .y = y + h, .width = w, .height = h }, .bodies = std.ArrayList(Body).init(Allocator), .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        const alloc = std.heap.page_allocator;
+        this.nw = alloc.create(QuadTree) catch return;
+        this.ne = alloc.create(QuadTree) catch return;
+        this.sw = alloc.create(QuadTree) catch return;
+        this.se = alloc.create(QuadTree) catch return;
+        this.nw.* = QuadTree{ .boundary = Rect{ .x = x, .y = y, .width = w, .height = h }, .depth = this.depth + 1, .bodies = std.ArrayList(Body).init(alloc), .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        this.ne.* = QuadTree{ .boundary = Rect{ .x = x + w, .y = y, .width = w, .height = h }, .depth = this.depth + 1, .bodies = std.ArrayList(Body).init(alloc), .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        this.sw.* = QuadTree{ .boundary = Rect{ .x = x, .y = y + h, .width = w, .height = h }, .depth = this.depth + 1, .bodies = std.ArrayList(Body).init(alloc), .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+        this.se.* = QuadTree{ .boundary = Rect{ .x = x + w, .y = y + h, .width = w, .height = h }, .depth = this.depth + 1, .bodies = std.ArrayList(Body).init(alloc), .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
         this.divided = true;
 
         // Redistribute existing bodies into new quadrants
@@ -139,7 +148,7 @@ const QuadTree = struct {
             _ = this.insert(body);
         }
         // Clear the original bodies list as they are now in the sub-quadrants
-        this.bodies.deinit();
+        this.bodies.clearRetainingCapacity();
     }
 
     fn query(this: *QuadTree, range: Rect, found: *std.ArrayList(Body)) void {
@@ -148,7 +157,7 @@ const QuadTree = struct {
         }
         for (this.bodies.items) |body| {
             if (range.contains(body.pos)) {
-                found.append(body);
+                _ = found.append(body) catch return;
             }
         }
     }
@@ -217,8 +226,6 @@ export fn init() void {
 
     const gpa = std.heap.page_allocator;
     bodies = std.ArrayList(Body).init(gpa);
-
-    defer bodies.deinit();
 
     var prng = std.rand.DefaultPrng.init(42);
     for (0..MAX_BODIES) |_| {
@@ -292,18 +299,6 @@ export fn cleanup() void {
 }
 
 fn updatePhysics() QuadTreeError!void {
-    quadtree.clear();
-
-    for (quadtree.bodies.items) |body| {
-        const success = quadtree.insert(body) catch |err| {
-            std.debug.print("Insertion failed with error: {}\n", .{err});
-            continue;
-        };
-        if (!success) {
-            std.debug.print("Failed to insert body.\n", .{});
-        }
-    }
-
     for (quadtree.bodies.items) |*body| {
         var force = vec2.zero();
         quadtree.calculateForce(body, &force);
@@ -331,34 +326,18 @@ pub fn main() void {
     });
 }
 
-fn calculateForce(body: Body, force: *vec2) void {
-    if (quadtree.divided) {
-        if (quadtree.boundary.contains(body.pos)) {
-            for (0..quadtree.bodies.len) |i| {
-                const other = quadtree.bodies.items[i];
-                if (other != body) {
-                    const f = body.updateForce(&other);
-                    force.add(f);
-                }
-            }
-        } else {
-            if (quadtree.boundary.intersects(body.pos)) {
-                if (quadtree.nw == null) {
-                    quadtree.subdivide();
-                }
-                if (quadtree.nw) |nw| {
-                    nw.calculateForce(body, force);
-                }
-                if (quadtree.ne) |ne| {
-                    ne.calculateForce(body, force);
-                }
-                if (quadtree.sw) |sw| {
-                    sw.calculateForce(body, force);
-                }
-                if (quadtree.se) |se| {
-                    se.calculateForce(body, force);
-                }
-            }
-        }
-    }
+test "RGBA new returns opaque red" {
+    const color = RGBA.new();
+    try std.testing.expectEqual(@as(u8, 255), color.r);
+    try std.testing.expectEqual(@as(u8, 0), color.g);
+    try std.testing.expectEqual(@as(u8, 0), color.b);
+    try std.testing.expectEqual(@as(u8, 255), color.a);
+}
+
+test "Rect intersection" {
+    const r1 = Rect{ .x = 0, .y = 0, .width = 10, .height = 10 };
+    const r2 = Rect{ .x = 5, .y = 5, .width = 10, .height = 10 };
+    const r3 = Rect{ .x = 20, .y = 20, .width = 5, .height = 5 };
+    try std.testing.expect(r1.intersects(r2));
+    try std.testing.expect(!r1.intersects(r3));
 }
