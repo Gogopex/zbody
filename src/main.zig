@@ -6,23 +6,18 @@ const sapp = sokol.app;
 const sglue = sokol.glue;
 const slog = sokol.log;
 const sgl = sokol.gl;
-const math = @import("std").math;
-const mem = std.mem;
-const Allocator = mem.Allocator;
 
-const MAX_BODIES = 10;
-const G = 6.67430e-11;
-const damping = 0.99;
-
-const QuadTreeError = error{
-    OutOfMemory,
-    PositionOutOfBounds,
-};
-
-const State = struct {
-    var bindings: sg.Bindings = .{};
-    var pipeline: sg.Pipeline = .{};
-    var pass_action: sg.PassAction = .{};
+const SimulationParams = struct {
+    const max_bodies = 50;
+    const gravity_constant = 50.0;
+    const damping = 0.9995;
+    const softening = 100.0;
+    const dt = 0.016;
+    const world_size = 700.0;
+    const central_mass = 1000.0;
+    const central_force_multiplier = 1.0;
+    const repulsion_radius = 50.0;
+    const repulsion_strength = 500.0;
 };
 
 const Body = struct {
@@ -30,28 +25,42 @@ const Body = struct {
     vel: vec2,
     mass: f32,
     radius: f32,
-    color: RGBA,
+    color: Color,
     force: vec2,
 
     fn updateForce(this: *Body, other: *Body) vec2 {
         const r = other.pos.sub(this.pos);
         const distanceSquared = r.lengthSquared();
         if (distanceSquared > 0.00001) {
-            const f = G * this.mass * other.mass / distanceSquared;
+            const f = SimulationParams.gravity_constant * this.mass * other.mass / (distanceSquared + SimulationParams.softening);
             return r.normalize().scale(f);
         }
         return vec2{ .x = 0.0, .y = 0.0 };
     }
 };
 
-pub const RGBA = struct {
+pub const Color = struct {
     r: u8,
     g: u8,
     b: u8,
     a: u8,
 
-    pub fn new() RGBA {
-        return RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    pub fn random(rng: *std.Random.DefaultPrng) Color {
+        return .{
+            .r = rng.random().int(u8),
+            .g = rng.random().int(u8),
+            .b = rng.random().int(u8),
+            .a = 255,
+        };
+    }
+    
+    pub fn toNormalized(self: Color) struct { r: f32, g: f32, b: f32, a: f32 } {
+        return .{
+            .r = @as(f32, @floatFromInt(self.r)) / 255.0,
+            .g = @as(f32, @floatFromInt(self.g)) / 255.0,
+            .b = @as(f32, @floatFromInt(self.b)) / 255.0,
+            .a = @as(f32, @floatFromInt(self.a)) / 255.0,
+        };
     }
 };
 
@@ -85,30 +94,7 @@ const QuadTree = struct {
     sw: ?*QuadTree,
     se: ?*QuadTree,
 
-    fn clear(this: *QuadTree) void {
-        this.bodies.clearRetainingCapacity();
-        this.centerOfMass = vec2.zero();
-        this.totalMass = 0.0;
-        this.divided = false;
-        if (this.nw) |nw| {
-            nw.clear();
-        }
-        if (this.ne) |ne| {
-            ne.clear();
-        }
-        if (this.sw) |sw| {
-            sw.clear();
-        }
-        if (this.se) |se| {
-            se.clear();
-        }
-        this.nw = null;
-        this.ne = null;
-        this.sw = null;
-        this.se = null;
-    }
-
-    fn insert(this: *QuadTree, body: Body) Allocator.Error!bool {
+    fn insert(this: *QuadTree, body: Body) std.mem.Allocator.Error!bool {
         if (!this.boundary.contains(body.pos)) {
             return false;
         }
@@ -143,23 +129,10 @@ const QuadTree = struct {
         this.se.* = QuadTree{ .boundary = Rect{ .x = x + w, .y = y + h, .width = w, .height = h }, .depth = this.depth + 1, .bodies = std.ArrayList(Body).init(alloc), .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
         this.divided = true;
 
-        // Redistribute existing bodies into new quadrants
         for (this.bodies.items) |body| {
             _ = this.insert(body);
         }
-        // Clear the original bodies list as they are now in the sub-quadrants
         this.bodies.clearRetainingCapacity();
-    }
-
-    fn query(this: *QuadTree, range: Rect, found: *std.ArrayList(Body)) void {
-        if (!this.boundary.intersects(range)) {
-            return;
-        }
-        for (this.bodies.items) |body| {
-            if (range.contains(body.pos)) {
-                _ = found.append(body) catch return;
-            }
-        }
     }
 
     fn shouldApproximate(this: *QuadTree, body: *Body) bool {
@@ -171,7 +144,7 @@ const QuadTree = struct {
         const r = centerOfMass.sub(body.pos);
         const distanceSquared = r.lengthSquared();
         if (distanceSquared > 0.00001) {
-            const f = G * body.mass * totalMass / distanceSquared;
+            const f = SimulationParams.gravity_constant * body.mass * totalMass / (distanceSquared + SimulationParams.softening);
             return r.normalize().scale(f);
         }
         return vec2{ .x = 0.0, .y = 0.0 };
@@ -209,9 +182,9 @@ const QuadTree = struct {
 
 var bodies: std.ArrayList(Body) = undefined;
 var quadtree: QuadTree = undefined;
+var pass_action: sg.PassAction = .{};
 
 export fn init() void {
-    std.debug.print("init", .{});
     sg.setup(.{
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
@@ -219,78 +192,92 @@ export fn init() void {
     sgl.setup(.{
         .logger = .{ .func = slog.func },
     });
-    State.pass_action.colors[0] = .{
+    pass_action.colors[0] = .{
         .load_action = .CLEAR,
-        .clear_value = .{ .r = 0, .g = 0, .b = 0 },
+        .clear_value = .{ .r = 0.02, .g = 0.02, .b = 0.05 },
     };
 
     const gpa = std.heap.page_allocator;
     bodies = std.ArrayList(Body).init(gpa);
 
-    var prng = std.rand.DefaultPrng.init(42);
-    for (0..MAX_BODIES) |_| {
-        const x = prng.random().float(f32) * 100;
-        const y = prng.random().float(f32) * 100;
-        const vel_x = prng.random().float(f32) * 2 - 1;
-        const vel_y = prng.random().float(f32) * 2 - 1;
-        const mass = prng.random().float(f32) * 10 + 1;
-        const radius = prng.random().float(f32) * 5 + 1;
-        const color = RGBA.new();
+    var prng = std.Random.DefaultPrng.init(42);
+    for (0..SimulationParams.max_bodies) |_| {
+        const angle = prng.random().float(f32) * 2.0 * std.math.pi;
+        const orbit_radius = prng.random().float(f32) * 250 + 100;
+        const x = SimulationParams.world_size / 2.0 + @cos(angle) * orbit_radius;
+        const y = SimulationParams.world_size / 2.0 + @sin(angle) * orbit_radius;
+        
+        const orbital_speed = @sqrt(SimulationParams.gravity_constant * SimulationParams.central_mass * SimulationParams.central_force_multiplier / orbit_radius) * 0.8;
+        const vel_x = -@sin(angle) * orbital_speed + (prng.random().float(f32) - 0.5) * 20;
+        const vel_y = @cos(angle) * orbital_speed + (prng.random().float(f32) - 0.5) * 20;
+        const mass = prng.random().float(f32) * 50 + 10;
+        const body_radius = prng.random().float(f32) * 8 + 2;
+        const color = Color.random(&prng);
         const force = vec2.zero();
-        const body = Body{ .pos = vec2{ .x = x, .y = y }, .vel = vec2{ .x = vel_x, .y = vel_y }, .mass = mass, .radius = radius, .color = color, .force = force };
-        const res = bodies.append(body) catch |err| {
-            std.debug.print("Error appending body: {}\n", .{err});
-            break;
-        };
-        _ = res;
+        const body = Body{ .pos = vec2{ .x = x, .y = y }, .vel = vec2{ .x = vel_x, .y = vel_y }, .mass = mass, .radius = body_radius, .color = color, .force = force };
+        bodies.append(body) catch break;
     }
 
-    //print bodies
-    std.debug.print("bodies: {}", .{bodies});
-
-    quadtree = QuadTree{ .boundary = Rect{ .x = 0, .y = 0, .width = 100, .height = 100 }, .depth = 0, .bodies = bodies, .centerOfMass = vec2.zero(), .totalMass = 0.0, .divided = false, .nw = null, .ne = null, .sw = null, .se = null };
+    quadtree = QuadTree{ 
+        .boundary = Rect{ .x = 0, .y = 0, .width = SimulationParams.world_size, .height = SimulationParams.world_size }, 
+        .depth = 0, 
+        .bodies = bodies, 
+        .centerOfMass = vec2.zero(), 
+        .totalMass = 0.0, 
+        .divided = false, 
+        .nw = null, 
+        .ne = null, 
+        .sw = null, 
+        .se = null 
+    };
 
     for (bodies.items) |body| {
-        const success = quadtree.insert(body) catch |err| {
-            std.debug.print("Insertion failed with error: {}\n", .{err});
-            continue;
-        };
-        if (!success) {
-            std.debug.print("Failed to insert body.\n", .{});
-        }
+        _ = quadtree.insert(body) catch continue;
     }
 }
 
 export fn frame() void {
-    const frame_count = sapp.frameCount();
-    std.debug.print("Frame count: {}\n", .{frame_count});
-
     sgl.defaults();
-    sgl.beginPoints();
+    sgl.matrixModeProjection();
+    sgl.ortho(-1.0, 1.0, 1.0, -1.0, -1.0, 1.0);
 
-    updatePhysics() catch |err| {
-        std.debug.print("Failed to update physics: {}\n", .{err});
-    };
+    updatePhysics() catch {};
 
-    std.debug.print("Quadtree: {}\n", .{quadtree});
-    std.debug.print("Bodies: {}\n", .{quadtree.bodies.items.len});
+    drawCircle(0.0, 0.0, 20.0 / (SimulationParams.world_size / 2.0), 0.8, 0.4, 1.0, 0.1, 3.0);
+    drawCircle(0.0, 0.0, 20.0 / (SimulationParams.world_size / 2.0), 1.0, 0.6, 1.0, 0.9, 1.0);
+    
     if (quadtree.bodies.items.len > 0) {
-        for (0..quadtree.bodies.items.len) |i| {
-            sgl.c3f(10.0, 0.0, 0.0);
-            sgl.v2f(quadtree.bodies.items[i].pos.x, quadtree.bodies.items[i].pos.y);
-            sgl.pointSize(quadtree.bodies.items[i].radius);
-            std.debug.print("Body #{}: x: {}, y: {}\n", .{ i, quadtree.bodies.items[i].pos.x, quadtree.bodies.items[i].pos.y });
+        for (quadtree.bodies.items) |body| {
+            const norm_x = (body.pos.x / (SimulationParams.world_size / 2.0)) - 1.0;
+            const norm_y = -((body.pos.y / (SimulationParams.world_size / 2.0)) - 1.0);
+            const color = body.color.toNormalized();
+            const radius_norm = body.radius / (SimulationParams.world_size / 2.0);
+            
+            drawCircle(norm_x, norm_y, radius_norm, color.r * 0.5, color.g * 0.5, color.b * 0.5, 0.2, 2.0);
+            drawCircle(norm_x, norm_y, radius_norm, color.r, color.g, color.b, 1.0, 1.0);
         }
-    } else {
-        std.debug.print("No bodies to render.\n", .{});
     }
 
-    sgl.end();
-
-    sg.beginPass(.{ .action = State.pass_action, .swapchain = sglue.swapchain() });
+    sg.beginPass(.{ .action = pass_action, .swapchain = sglue.swapchain() });
     sgl.draw();
     sg.endPass();
     sg.commit();
+}
+
+fn drawCircle(cx: f32, cy: f32, radius: f32, r: f32, g: f32, b: f32, a: f32, scale: f32) void {
+    sgl.beginTriangles();
+    sgl.c4f(r, g, b, a);
+    const segments = 32;
+    var i: u32 = 0;
+    while (i < segments) : (i += 1) {
+        const a1 = @as(f32, @floatFromInt(i)) * 2.0 * std.math.pi / @as(f32, segments);
+        const a2 = @as(f32, @floatFromInt(i + 1)) * 2.0 * std.math.pi / @as(f32, segments);
+        
+        sgl.v2f(cx, cy);
+        sgl.v2f(cx + @cos(a1) * radius * scale, cy + @sin(a1) * radius * scale);
+        sgl.v2f(cx + @cos(a2) * radius * scale, cy + @sin(a2) * radius * scale);
+    }
+    sgl.end();
 }
 
 export fn cleanup() void {
@@ -298,18 +285,43 @@ export fn cleanup() void {
     sg.shutdown();
 }
 
-fn updatePhysics() QuadTreeError!void {
+fn updatePhysics() !void {
+    const center = vec2{ .x = SimulationParams.world_size / 2.0, .y = SimulationParams.world_size / 2.0 };
+    
     for (quadtree.bodies.items) |*body| {
         var force = vec2.zero();
         quadtree.calculateForce(body, &force);
+        
+        const r = center.sub(body.pos);
+        const dist = @sqrt(r.lengthSquared());
+        
+        if (dist > 0.1) {
+            if (dist < SimulationParams.repulsion_radius) {
+                const repulsion = SimulationParams.repulsion_strength * body.mass / (dist * dist + 10.0);
+                force = force.sub(r.normalize().scale(repulsion));
+            } else {
+                const dist_sq = dist * dist;
+                const central_force = SimulationParams.gravity_constant * SimulationParams.central_force_multiplier * body.mass * SimulationParams.central_mass / (dist_sq + SimulationParams.softening);
+                force = force.add(r.normalize().scale(central_force));
+            }
+        }
+        
         body.force = force;
     }
 
-    const dt: f32 = 0.1;
     for (quadtree.bodies.items) |*body| {
         const acceleration = body.force.scale(1.0 / body.mass);
-        body.vel = body.vel.add(acceleration.scale(dt));
-        body.pos = body.pos.add(body.vel.scale(dt));
+        body.vel = body.vel.add(acceleration.scale(SimulationParams.dt)).scale(SimulationParams.damping);
+        body.pos = body.pos.add(body.vel.scale(SimulationParams.dt));
+        
+        if (body.pos.x < 0 or body.pos.x > SimulationParams.world_size) {
+            body.vel.x = -body.vel.x * 0.8;
+            body.pos.x = @max(0, @min(SimulationParams.world_size, body.pos.x));
+        }
+        if (body.pos.y < 0 or body.pos.y > SimulationParams.world_size) {
+            body.vel.y = -body.vel.y * 0.8;
+            body.pos.y = @max(0, @min(SimulationParams.world_size, body.pos.y));
+        }
     }
 }
 
@@ -324,20 +336,4 @@ pub fn main() void {
         .window_title = "Z-Body Simulation",
         .logger = .{ .func = slog.func },
     });
-}
-
-test "RGBA new returns opaque red" {
-    const color = RGBA.new();
-    try std.testing.expectEqual(@as(u8, 255), color.r);
-    try std.testing.expectEqual(@as(u8, 0), color.g);
-    try std.testing.expectEqual(@as(u8, 0), color.b);
-    try std.testing.expectEqual(@as(u8, 255), color.a);
-}
-
-test "Rect intersection" {
-    const r1 = Rect{ .x = 0, .y = 0, .width = 10, .height = 10 };
-    const r2 = Rect{ .x = 5, .y = 5, .width = 10, .height = 10 };
-    const r3 = Rect{ .x = 20, .y = 20, .width = 5, .height = 5 };
-    try std.testing.expect(r1.intersects(r2));
-    try std.testing.expect(!r1.intersects(r3));
 }

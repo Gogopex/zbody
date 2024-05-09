@@ -1,12 +1,13 @@
 .{
-    .name = "zbody",
+    .name = .zbody,
     .version = "0.1.0",
+    .fingerprint = 0x8facdbddff15bf1e,
     .paths = .{
         "src",
         "build.zig",
         "build.zig.zon",
     },
     .dependencies = .{
-        .sokol = .{ .url = "git+https://github.com/floooh/sokol-zig.git#18f4f3d6188f4faff2fab6bd7f8abc58e6e26b04", .hash = "12204b76dc14c74da9d61d01b5bd7a4fbfd0614aa7cc0a7428de0742129203ca5008" },
+        .sokol = .{ .url = "git+https://github.com/floooh/sokol-zig.git#251946321ba77c2536bbb409e7f4aa0ea51e5281", .hash = "sokol-0.1.0-pb1HK_yULQBF55EJMaQt6_zNksfMvo41FDzMXKaQQEMX", },
     },
 }

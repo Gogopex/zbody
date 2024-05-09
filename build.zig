@@ -1,8 +1,6 @@
 const std = @import("std");
 const Build = std.Build;
 const OptimizeMode = std.builtin.OptimizeMode;
-const sokol = @import("sokol");
-const zlm: type = @import("zlm");
 
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -18,11 +16,12 @@ pub fn build(b: *Build) !void {
     // });
 
     // special case handling for native vs web build
-    if (target.result.isWasm()) {
-        try buildWeb(b, target, optimize, dep_sokol);
-    } else {
+    // TODO: Fix web build for Zig 0.14
+    // if (target.result.cpu.arch == .wasm32 or target.result.cpu.arch == .wasm64) {
+    //     try buildWeb(b, target, optimize, dep_sokol);
+    // } else {
         try buildNative(b, target, optimize, dep_sokol);
-    }
+    // }
 }
 
 fn buildNative(b: *Build, target: Build.ResolvedTarget, optimize: OptimizeMode, dep_sokol: *Build.Dependency) !void {
@@ -30,7 +29,7 @@ fn buildNative(b: *Build, target: Build.ResolvedTarget, optimize: OptimizeMode, 
         .name = "zbody",
         .target = target,
         .optimize = optimize,
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
     });
     zbody.root_module.addImport("sokol", dep_sokol.module("sokol"));
     // zbody.root_module.addImport("zlm", dep_zlm.module("zlm"));
@@ -41,18 +40,24 @@ fn buildNative(b: *Build, target: Build.ResolvedTarget, optimize: OptimizeMode, 
 }
 
 fn buildWeb(b: *Build, target: Build.ResolvedTarget, optimize: OptimizeMode, dep_sokol: *Build.Dependency) !void {
-    const zbody = b.addStaticLibrary(.{
-        .name = "zbody",
+    const zbody_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .root_source_file = .{ .path = "src/main.zig" },
     });
-    zbody.root_module.addImport("sokol", dep_sokol.module("sokol"));
+    zbody_module.addImport("sokol", dep_sokol.module("sokol"));
+    
+    const zbody = b.addLibrary(.{
+        .name = "zbody",
+        .root_module = zbody_module,
+        .linkage = .static,
+    });
     // zbody.root_module.addImport("zlm", dep_zlm.module("zlm"));
 
     // create a build step which invokes the Emscripten linker
     const emsdk = dep_sokol.builder.dependency("emsdk", .{});
-    const link_step = try sokol.emLinkStep(b, .{
+    const sokol_build = dep_sokol.builder.build_root.build_zig;
+    const link_step = try sokol_build.emLinkStep(b, .{
         .lib_main = zbody,
         .target = target,
         .optimize = optimize,
@@ -63,7 +68,7 @@ fn buildWeb(b: *Build, target: Build.ResolvedTarget, optimize: OptimizeMode, dep
         .shell_file_path = dep_sokol.path("src/sokol/web/shell.html").getPath(b),
     });
     // ...and a special run step to start the web build output via 'emrun'
-    const run = sokol.emRunStep(b, .{ .name = "zbody-wasm", .emsdk = emsdk });
+    const run = sokol_build.emRunStep(b, .{ .name = "zbody-wasm", .emsdk = emsdk });
     run.step.dependOn(&link_step.step);
     b.step("run", "Run zbody-wasm").dependOn(&run.step);
 }
